@@ -1,53 +1,216 @@
-##########################################
-# Copyright 2012-2014 Ceruti Francesco & contributors
+# -*- coding: utf-8 -*-
 #
-# This file is part of LiSP (Linux Show Player).
-##########################################
+# This file is part of Linux Show Player
+#
+# Copyright 2012-2017 Francesco Ceruti <ceppofrancy@gmail.com>
+#
+# Linux Show Player is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Linux Show Player is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+from threading import Lock
 
-from lisp.core.media import Media
+from PyQt5.QtCore import QT_TRANSLATE_NOOP
 
-from lisp.cues.cue import Cue
-from lisp.utils.decorators import synchronized
+from lisp.core.configuration import config
+from lisp.core.decorators import async
+from lisp.core.fade_functions import FadeInType, FadeOutType
+from lisp.core.fader import Fader
+from lisp.core.has_properties import NestedProperties
+from lisp.cues.cue import Cue, CueAction, CueState
 
 
 class MediaCue(Cue):
+    Name = QT_TRANSLATE_NOOP('CueName', 'Media Cue')
 
-    def __init__(self, media, cue_id=None):
-        super().__init__(cue_id)
+    _media_ = NestedProperties('media', default={})
+
+    CueActions = (CueAction.Default, CueAction.Start, CueAction.FadeInStart,
+                  CueAction.Stop, CueAction.FadeOutStop, CueAction.Pause,
+                  CueAction.FadeOut, CueAction.FadeIn, CueAction.FadeOutPause,
+                  CueAction.Interrupt, CueAction.FadeOutInterrupt)
+
+    def __init__(self, media, id=None):
+        super().__init__(id=id)
+        self.default_start_action = CueAction.FadeInStart.value
+        self.default_stop_action = CueAction.FadeOutStop.value
 
         self.media = media
-        self.update_properties({'pause': False})
+        self.media.changed('duration').connect(self._duration_change)
+        self.media.elements_changed.connect(self.__elements_changed)
+        self.media.error.connect(self._on_error)
+        self.media.eos.connect(self._on_eos)
 
-        self.__finalized = False
+        self.__in_fadein = False
+        self.__in_fadeout = False
 
-    @synchronized
-    def execute(self, emit=True):
-        super().execute(emit=emit)
+        self.__volume = self.media.element('Volume')
+        self.__fader = Fader(self.__volume, 'current_volume')
+        self.__fade_lock = Lock()
 
-        if self.media.state != Media.PLAYING:
-            self.media.play()
-        elif self['pause']:
-            self.media.pause()
+    def __elements_changed(self):
+        self.__volume = self.media.element('Volume')
+        self.__fader.target = self.__volume
+
+    def __start__(self, fade=False):
+        if fade and self._can_fade(self.fadein_duration):
+            self.__volume.current_volume = 0
+
+        self.media.play()
+        if fade:
+            self._on_start_fade()
+
+        return True
+
+    def __stop__(self, fade=False):
+        if self.__in_fadeout:
+            self.__fader.stop()
         else:
-            self.media.stop()
+            if self.__in_fadein:
+                self.__fader.stop()
 
-    def properties(self):
-        properties = super().properties().copy()
-        properties['media'] = self.media.properties()
-        return properties
+            if self._state & CueState.Running and fade:
+                self._st_lock.release()
+                ended = self._on_stop_fade()
+                self._st_lock.acquire()
+                if not ended:
+                    return False
 
-    def update_properties(self, properties):
-        if 'media' in properties:
-            media_props = properties.pop('media')
-            self.media.update_properties(media_props)
+        self.media.stop()
+        return True
 
-        super().update_properties(properties)
+    def __pause__(self, fade=False):
+        if self.__in_fadeout:
+            self.__fader.stop()
+        else:
+            if self.__in_fadein:
+                self.__fader.stop()
 
-    def finalize(self):
-        if not self.__finalized:
-            self.__finalized = True
-            self.media.dispose()
+            if fade:
+                self._st_lock.release()
+                ended = self._on_stop_fade()
+                self._st_lock.acquire()
+                if not ended:
+                    return False
 
-    def is_finalized(self):
-        return self.__finalized
+        self.media.pause()
+        return True
+
+    def __interrupt__(self, fade=False):
+        self.__fader.stop()
+
+        if self._state & CueState.Running and fade:
+            self._on_stop_fade(interrupt=True)
+
+        self.media.interrupt()
+
+    @async
+    def fadein(self, duration, fade_type):
+        if not self._st_lock.acquire(timeout=0.1):
+            return
+
+        if self._state & CueState.Running:
+            self.__fader.stop()
+
+            if self.__volume is not None:
+                if duration <= 0:
+                    self.__volume.current_volume = self.__volume.volume
+                else:
+                    self._st_lock.release()
+                    self.__fadein(duration, self.__volume.volume, fade_type)
+                    return
+
+        self._st_lock.release()
+
+    @async
+    def fadeout(self, duration, fade_type):
+        if not self._st_lock.acquire(timeout=0.1):
+            return
+
+        if self._state & CueState.Running:
+            self.__fader.stop()
+
+            if self.__volume is not None:
+                if duration <= 0:
+                    self.__volume.current_volume = 0
+                else:
+                    self._st_lock.release()
+                    self.__fadeout(duration, 0, fade_type)
+                    return
+
+        self._st_lock.release()
+
+    def __fadein(self, duration, to_value, fade_type):
+        ended = True
+        if self._can_fade(duration):
+            with self.__fade_lock:
+                self.__in_fadein = True
+                self.fadein_start.emit()
+                try:
+                    self.__fader.prepare()
+                    ended = self.__fader.fade(duration, to_value, fade_type)
+                finally:
+                    self.__in_fadein = False
+                    self.fadein_end.emit()
+
+        return ended
+
+    def __fadeout(self, duration, to_value, fade_type):
+        ended = True
+        if self._can_fade(duration):
+            with self.__fade_lock:
+                self.__in_fadeout = True
+                self.fadeout_start.emit()
+                try:
+                    self.__fader.prepare()
+                    ended = self.__fader.fade(duration, to_value, fade_type)
+                finally:
+                    self.__in_fadeout = False
+                    self.fadeout_end.emit()
+
+        return ended
+
+    def current_time(self):
+        return self.media.current_time()
+
+    def _duration_change(self, value):
+        self.duration = value
+
+    def _on_eos(self, *args):
+        with self._st_lock:
+            self.__fader.stop()
+            self._ended()
+
+    def _on_error(self, media, message, details):
+        with self._st_lock:
+            self.__fader.stop()
+            self._error(message, details)
+
+    def _can_fade(self, duration):
+        return self.__volume is not None and duration > 0
+
+    @async
+    def _on_start_fade(self):
+        if self.__volume is not None:
+            self.__fadein(self.fadein_duration,
+                          self.__volume.volume,
+                          FadeInType[self.fadein_type])
+
+    def _on_stop_fade(self, interrupt=False):
+        if interrupt:
+            duration = config['Cue'].getfloat('InterruptFade')
+            fade_type = config['Cue'].get('InterruptFadeType')
+        else:
+            duration = self.fadeout_duration
+            fade_type = self.fadeout_type
+
+        return self.__fadeout(duration, 0, FadeOutType[fade_type])

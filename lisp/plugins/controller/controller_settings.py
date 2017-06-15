@@ -1,160 +1,64 @@
-##########################################
-# Copyright 2012-2014 Ceruti Francesco & contributors
+# -*- coding: utf-8 -*-
 #
-# This file is part of LiSP (Linux Show Player).
-##########################################
+# This file is part of Linux Show Player
+#
+# Copyright 2012-2016 Francesco Ceruti <ceppofrancy@gmail.com>
+#
+# Linux Show Player is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Linux Show Player is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from PyQt5.QtCore import QRegExp, Qt
-from PyQt5.QtGui import QRegExpValidator
-from PyQt5.QtWidgets import QVBoxLayout, QGroupBox, QHBoxLayout, QLineEdit, \
-    QLabel, QGridLayout, QCheckBox, QSpinBox, QPushButton, QComboBox, \
-    QMessageBox
-import mido
+from PyQt5.QtCore import QT_TRANSLATE_NOOP
+from PyQt5.QtWidgets import QHBoxLayout, QTabWidget
 
-from lisp.modules import check_module
-from lisp.modules.midi.midi import InputMidiHandler
-from lisp.ui.settings.section import SettingsSection
+from lisp.plugins.controller import protocols
+from lisp.ui.settings.settings_page import CueSettingsPage
+from lisp.ui.ui_utils import translate
 
 
-class ControllerSettings(SettingsSection):
+class ControllerSettings(CueSettingsPage):
+    Name = QT_TRANSLATE_NOOP('SettingsPageName', 'Cue Control')
 
-    Name = 'MIDI and Hot-Key'
+    def __init__(self, cue_class, **kwargs):
+        super().__init__(cue_class, **kwargs)
+        self.setLayout(QHBoxLayout())
 
-    def __init__(self, size, cue=None, **kwargs):
-        super().__init__(size, cue=None, **kwargs)
+        self._pages = []
 
-        self.verticalLayout = QVBoxLayout(self)
+        self.tabWidget = QTabWidget(self)
+        self.layout().addWidget(self.tabWidget)
 
-        self.keyGroup = QGroupBox(self)
-        self.keyGroup.setTitle('Keyboard input')
+        for page in protocols.ProtocolsSettingsPages:
+            page_widget = page(cue_class, parent=self)
 
-        self.horizontalLayout = QHBoxLayout(self.keyGroup)
+            self.tabWidget.addTab(page_widget,
+                                  translate('SettingsPageName', page.Name))
+            self._pages.append(page_widget)
 
-        self.key = QLineEdit(self.keyGroup)
-        regex = QRegExp('(.,)*')
-        self.key.setValidator(QRegExpValidator(regex))
-        self.horizontalLayout.addWidget(self.key)
+        self.tabWidget.setCurrentIndex(0)
 
-        self.keyLabel = QLabel('Insert key(s)', self.keyGroup)
-        self.keyLabel.setAlignment(Qt.AlignCenter)
-        self.horizontalLayout.addWidget(self.keyLabel)
+    def enable_check(self, enabled):
+        for page in self._pages:
+            page.enable_check(enabled)
 
-        self.verticalLayout.addWidget(self.keyGroup)
+    def get_settings(self):
+        settings = {}
+        for page in self._pages:
+            settings.update(page.get_settings())
 
-        self.midiGroup = QGroupBox(self)
-        self.midiGroup.setTitle('MIDI')
+        return {'controller': settings}
 
-        self.midiLayout = QGridLayout(self.midiGroup)
+    def load_settings(self, settings):
+        settings = settings.get('controller', {})
 
-        self.midiResetCheck = QCheckBox('Reset / Ignore', self.midiGroup)
-        self.midiLayout.addWidget(self.midiResetCheck, 0, 0)
-
-        self.midiChannels = QSpinBox(self.midiGroup)
-        self.midiChannels.setRange(0, 15)
-        self.midiLayout.addWidget(self.midiChannels, 1, 0)
-        label = QLabel('Channel', self)
-        label.setAlignment(Qt.AlignCenter)
-        self.midiLayout.addWidget(label, 1, 1)
-
-        self.midiNote = QSpinBox(self.midiGroup)
-        self.midiNote.setRange(0, 255)
-        self.midiLayout.addWidget(self.midiNote, 2, 0)
-        label = QLabel('Note', self)
-        label.setAlignment(Qt.AlignCenter)
-        self.midiLayout.addWidget(label, 2, 1)
-
-        self.midiVelocity = QSpinBox(self.midiGroup)
-        self.midiVelocity.setRange(0, 255)
-        self.midiLayout.addWidget(self.midiVelocity, 3, 0)
-        label = QLabel('Velocity', self)
-        label.setAlignment(Qt.AlignCenter)
-        self.midiLayout.addWidget(label, 3, 1)
-
-        self.midiCapture = QPushButton('Capture', self.midiGroup)
-        self.midiCapture.clicked.connect(self.capture_message)
-        self.midiLayout.addWidget(self.midiCapture, 4, 0)
-
-        self.noteFilterCombo = QComboBox(self.midiGroup)
-        self.midiLayout.addWidget(self.noteFilterCombo, 4, 1)
-        self.noteFilterCombo.addItem('Filter "note on"', userData='note_on')
-        self.noteFilterCombo.addItem('Filter "note off"', userData='note_off')
-
-        self.verticalLayout.addWidget(self.midiGroup)
-        self.verticalLayout.setStretch(0, 1)
-        self.verticalLayout.setStretch(1, 4)
-
-        self.midiResetCheck.toggled.connect(self.on_reset_toggled)
-
-        self.msg_type = 'note_on'
-
-    def enable_check(self, enable):
-        self.keyGroup.setCheckable(enable)
-        self.keyGroup.setChecked(False)
-
-        self.midiGroup.setCheckable(enable)
-        self.midiGroup.setChecked(False)
-
-    def get_configuration(self):
-        conf = {}
-        checked = self.keyGroup.isCheckable()
-
-        if not (checked and not self.keyGroup.isChecked()):
-            # Using a Set to remove duplicates (faster & shorter method)
-            conf['hotkeys'] = set(self.key.text().strip().split(','))
-            conf['hotkeys'].discard('')
-            # But a common type is better for store values
-            conf['hotkeys'] = tuple(conf['hotkeys'])
-
-        if not (checked and not self.midiGroup.isChecked()):
-            if self.midiResetCheck.isChecked():
-                conf['midi'] = ''
-            else:
-                msg = mido.Message(self.msg_type,
-                                   channel=self.midiChannels.value(),
-                                   note=self.midiNote.value(),
-                                   velocity=self.midiVelocity.value())
-                conf['midi'] = str(msg)
-
-        return conf
-
-    def set_configuration(self, conf):
-        if 'hotkeys' in conf:
-            self.key.setText(','.join(conf['hotkeys']))
-        if 'midi' in conf and conf['midi'] != '':
-            msg = mido.messages.parse_string(conf['midi'])
-            self.msg_type = msg.type
-            self.midiChannels.setValue(msg.channel)
-            self.midiNote.setValue(msg.note)
-            self.midiVelocity.setValue(msg.velocity)
-        else:
-            self.midiResetCheck.setChecked(True)
-
-        if not check_module('midi'):
-            self.midiGroup.setEnabled(False)
-
-    def capture_message(self):
-        handler = InputMidiHandler()
-        handler.alternate_mode = True
-        handler.new_message_alt.connect(self.on_new_message)
-
-        QMessageBox.information(self, 'Input',
-                                      'Give a MIDI event and press OK')
-
-        handler.new_message_alt.disconnect(self.on_new_message)
-        handler.alternate_mode = False
-
-    def on_new_message(self, message):
-        t = self.noteFilterCombo.itemData(self.noteFilterCombo.currentIndex())
-        if t == message.type:
-            self.midiChannels.setValue(message.channel)
-            self.midiNote.setValue(message.note)
-            self.midiVelocity.setValue(message.velocity)
-
-            self.msg_type = message.type
-
-    def on_reset_toggled(self, checked):
-        self.midiChannels.setEnabled(not checked)
-        self.midiNote.setEnabled(not checked)
-        self.midiVelocity.setEnabled(not checked)
-        self.midiCapture.setEnabled(not checked)
-        self.noteFilterCombo.setEnabled(not checked)
+        for page in self._pages:
+            page.load_settings(settings)

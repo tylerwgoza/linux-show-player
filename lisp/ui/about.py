@@ -1,65 +1,127 @@
-##########################################
-# Copyright 2012-2014 Ceruti Francesco & contributors
+# -*- coding: utf-8 -*-
 #
-# This file is part of Linux Show Player.
-##########################################
+# This file is part of Linux Show Player
+#
+# Copyright 2012-2016 Francesco Ceruti <ceppofrancy@gmail.com>
+#
+# Linux Show Player is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Linux Show Player is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>
+
+from collections import OrderedDict
 
 from PyQt5 import QtCore
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import Qt, QT_TRANSLATE_NOOP
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QDialog, QGridLayout, QLabel, QWidget, QTabWidget, \
     QTextBrowser, QDialogButtonBox
+
 import lisp
-from lisp.utils import util
+from lisp.ui.ui_utils import translate
 
 
 class About(QDialog):
+    LICENSE = '''
+    <p>
+    Linux Show Player is free software: you can redistribute it and/or<br />
+    modify it under the terms of the GNU General Public License as published by<br />
+    the Free Software Foundation, either version 3 of the License, or<br />
+    (at your option) any later version.<br />
+    <br />
+    Linux Show Player is distributed in the hope that it will be useful,<br />
+    but WITHOUT ANY WARRANTY; without even the implied warranty of<br />
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the<br />
+    GNU General Public License for more details.
+    </p>
+    '''
 
-    ICON = util.file_path(__file__, "icon.png")
+    DESCRIPTION = QT_TRANSLATE_NOOP('AboutDialog',
+        'Linux Show Player is a cue-player designed for stage productions.')
+    WEB_SITE = 'http://linux-show-player.sourceforge.net'
+    USER_GROUP = 'http://groups.google.com/group/linux-show-player---users'
+    SOURCE_CODE = 'https://github.com/FrancescoCeruti/linux-show-player'
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    CONTRIBUTORS = OrderedDict({
+        QT_TRANSLATE_NOOP('About', 'Authors'): [
+            ('Francesco Ceruti', 'ceppofrancy@gmail.com')
+        ],
+        QT_TRANSLATE_NOOP('About', 'Contributors'): [
+            ('Yinameah', 'https://github.com/Yinameah'),
+            ('nodiscc', 'https://github.com/nodiscc'),
+            ('Thomas Achtner', 'info@offtools.de')
+        ],
+        QT_TRANSLATE_NOOP('About', 'Translators'): [
+            ('aroomthedoomed', 'https://github.com/aroomthedoomed'),
+            ('fri', 'https://www.transifex.com/user/profile/fri'),
+            ('Luis García-Tornel', 'tornel@gmail.com'),
+            ('miharix', 'https://github.com/miharix'),
+            ('Olivier Humbert', 'https://github.com/trebmuh')
+        ],
+    })
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
         self.setWindowModality(QtCore.Qt.ApplicationModal)
-        self.setWindowTitle('About Linux Show Player')
+        self.setWindowTitle(translate('About', 'About Linux Show Player'))
         self.setMaximumSize(500, 420)
         self.setMinimumSize(500, 420)
         self.resize(500, 420)
 
         self.setLayout(QGridLayout())
 
-        self.icon = QLabel(self)
-        self.icon.setPixmap(QPixmap(self.ICON).scaled(100, 100,
-                            transformMode=Qt.SmoothTransformation))
-        self.layout().addWidget(self.icon, 0, 0)
+        self.iconLabel = QLabel(self)
+        self.iconLabel.setPixmap(
+            QIcon.fromTheme('linux-show-player').pixmap(100, 100))
+        self.layout().addWidget(self.iconLabel, 0, 0)
 
         self.shortInfo = QLabel(self)
         self.shortInfo.setAlignment(Qt.AlignCenter)
-        self.shortInfo.setText('<h2>Linux Show Player   ' +
-                               str(lisp.__version__) + '</h2>'
-                               'Copyright © Francesco Ceruti')
+        self.shortInfo.setText('<h2>Linux Show Player   {0}</h2>'
+                               'Copyright © Francesco Ceruti'
+                               .format(str(lisp.__version__)))
         self.layout().addWidget(self.shortInfo, 0, 1)
 
         self.layout().addWidget(QWidget(), 1, 0, 1, 2)
 
-        # Informations tabs
+        # Information tabs
         self.tabWidget = QTabWidget(self)
         self.layout().addWidget(self.tabWidget, 2, 0, 1, 2)
 
         self.info = QTextBrowser(self)
         self.info.setOpenExternalLinks(True)
-        self.info.setHtml(self.INFO)
-        self.tabWidget.addTab(self.info, 'Info')
+        self.info.setHtml('''
+            <center><br />{0}<br /><br />
+            <a href="{1}">{2}</a><br />
+            <a href="{3}">{4}</a><br />
+            <a href="{5}">{6}</a><br /><center>'''.format(
+            translate('AboutDialog', self.DESCRIPTION),
+            self.WEB_SITE, translate('AboutDialog', 'Web site'),
+            self.USER_GROUP, translate('AboutDialog', 'Users  group'),
+            self.SOURCE_CODE, translate('AboutDialog', 'Source code'))
+        )
+        self.tabWidget.addTab(self.info, translate('AboutDialog', 'Info'))
 
         self.license = QTextBrowser(self)
         self.license.setOpenExternalLinks(True)
         self.license.setHtml(self.LICENSE)
-        self.tabWidget.addTab(self.license, 'License')
+        self.tabWidget.addTab(self.license, translate('AboutDialog', 'License'))
 
         self.contributors = QTextBrowser(self)
         self.contributors.setOpenExternalLinks(True)
-        self.contributors.setHtml(self.CONTRIBUTORS)
-        self.tabWidget.addTab(self.contributors, 'Contributors')
+
+        self.contributors.setHtml(self.__contributors())
+        self.tabWidget.addTab(self.contributors,
+                              translate('AboutDialog', 'Contributors'))
 
         # Ok button
         self.buttons = QDialogButtonBox(QDialogButtonBox.Ok)
@@ -76,34 +138,21 @@ class About(QDialog):
 
         self.buttons.setFocus()
 
-    LICENSE = '''
-<center>
-    Linux Show Player is free software: you can redistribute it and/or
-    modify it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.<br />
-    <br />
-    Linux Show Player is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-</center>'''
+    def __contributors(self):
+        text = ''
+        for section, people in self.CONTRIBUTORS.items():
+            text += '<u><b>{0}:</b></u><br />'.format(translate('About',
+                                                                section))
 
-    INFO = '''
-<center><br />
-    Linux Show Player is a cue-player designed for stage productions.<br \>
-</center>
-<center><br />
-    Web site: <a href="http://linux-show-player.sourceforge.net">linux-show-player.sourceforge.net</a><br \>
-    User group: <a href="http://groups.google.com/group/linux-show-player---users">groups.google.com</a><br \>
-    Source code: <a href="https://github.com/FrancescoCeruti/linux-show-player">GitHub</a>
-</center>'''
+            for person in people:
+                text += person[0]
+                if '://' in person[1]:
+                    text += ' - <a href="{0}">{1}</a>'.format(
+                        person[1], person[1][person[1].index('://')+3:])
+                elif person[1]:
+                    text += ' - <a href="mailto:{0}">{0}</a>'.format(person[1])
+                text += '<br />'
 
-    CONTRIBUTORS = '''
-<center>
-    <b>Author:</b><br />
-    Francesco Ceruti - <a href="mailto:ceppofrancy@gmail.com">ceppofrancy@gmail.com</a><br \><br />
-    <b>Contributors:</b><br />
-    Marco Asa
-</center>
-'''
+            text += '<br />'
+
+        return text

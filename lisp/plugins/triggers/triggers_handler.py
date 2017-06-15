@@ -1,56 +1,63 @@
-##########################################
-# Copyright 2012-2014 Ceruti Francesco & contributors
+# -*- coding: utf-8 -*-
 #
-# This file is part of LiSP (Linux Show Player).
-##########################################
+# This file is part of Linux Show Player
+#
+# Copyright 2012-2016 Francesco Ceruti <ceppofrancy@gmail.com>
+#
+# Linux Show Player is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Linux Show Player is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
+
+from enum import Enum
+
+from PyQt5.QtCore import QT_TRANSLATE_NOOP
 
 from lisp.application import Application
-from lisp.core.media_time import MediaTime
+from lisp.core.signal import Connection
+from lisp.cues.cue import CueAction
 
 
-class TriggersHandler:
+class CueTriggers(Enum):
+    Started = QT_TRANSLATE_NOOP('CueTriggers', 'Started')
+    Paused = QT_TRANSLATE_NOOP('CueTriggers', 'Paused')
+    Stopped = QT_TRANSLATE_NOOP('CueTriggers', 'Stopped')
+    Ended = QT_TRANSLATE_NOOP('CueTriggers','Ended')
 
-    def __init__(self, media):
-        self._media = media
-        self._media.on_play.connect(self._on_play)
-        self._media.stopped.connect(self._stopped)
 
-        self._media_time = MediaTime(media)
-        self._media_time.notify.connect(self._on_notify)
+class CueHandler:
+    def __init__(self, cue, triggers):
+        self.triggers = triggers
+        self.cue = cue
 
-        self._triggers = {}
+        self.cue.started.connect(self.__started, Connection.Async)
+        self.cue.paused.connect(self.__paused, Connection.Async)
+        self.cue.stopped.connect(self.__stopped, Connection.Async)
+        self.cue.end.connect(self.__ended, Connection.Async)
 
-    def load_triggers(self, conf):
-        for position in conf:
-            for cue_id in conf[position]:
-                cue = Application().layout.get_cue_by_id(cue_id)
-                if position in self._triggers:
-                    self._triggers[position].append((cue, cue_id))
-                else:
-                    self._triggers[position] = [(cue, cue_id)]
+    def __paused(self):
+        self.__execute(CueTriggers.Paused.value)
 
-    def reset_triggers(self):
-        self._triggers.clear()
+    def __started(self):
+        self.__execute(CueTriggers.Started.value)
 
-    def finalize(self):
-        self._media_time.notify.disconnect(self._on_notify)
-        self.reset_triggers()
+    def __stopped(self):
+        self.__execute(CueTriggers.Stopped.value)
 
-    def _on_play(self):
-        self._execute('Play')
+    def __ended(self):
+        self.__execute(CueTriggers.Ended.value)
 
-    def _on_notify(self, time):
-        self._execute(str(time // 100))
+    def __execute(self, trigger):
+        for target_id, action in self.triggers.get(trigger, []):
+            target = Application().cue_model.get(target_id)
 
-    def _stopped(self):
-        self._execute('Stopped')
-
-    def _execute(self, action):
-        for n, trigger in enumerate(self._triggers.get(action, [])):
-            cue, cue_id = trigger
-            if cue is None or cue.is_finalized():
-                cue = Application().layout.get_cue_by_id(cue_id)
-                self._triggers[action][n] = (cue, cue_id)
-
-            if cue is not None:
-                cue.execute()
+            if target is not None:
+                target.execute(CueAction(action))

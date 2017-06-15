@@ -1,77 +1,40 @@
-##########################################
-# Copyright 2012-2014 Ceruti Francesco & contributors
+# -*- coding: utf-8 -*-
 #
-# This file is part of LiSP (Linux Show Player).
-##########################################
+# This file is part of Linux Show Player
+#
+# Copyright 2012-2016 Francesco Ceruti <ceppofrancy@gmail.com>
+#
+# Linux Show Player is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Linux Show Player is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from PyQt5.QtCore import pyqtSignal, QObject
 import mido
 
-from lisp.core.singleton import QSingleton
+from lisp.core.configuration import config
+from lisp.core.module import Module
+from lisp.modules.midi.midi_settings import MIDISettings
+from lisp.ui.settings.app_settings import AppSettings
 
 
-# TODO: should be extended for future usage (e.g. multiple ports)
-class InputMidiHandler(QObject, metaclass=QSingleton):
+class Midi(Module):
+    """Provide MIDI I/O functionality"""
 
-    # Only when not in alternate-mode
-    new_message = pyqtSignal(mido.messages.BaseMessage)
-    # Only when in alternate-mode
-    new_message_alt = pyqtSignal(mido.messages.BaseMessage)
+    def __init__(self):
+        # Register the settings widget
+        AppSettings.register_settings_widget(MIDISettings)
 
-    def __init__(self, port_name='default', backend_name=None):
-        super().__init__()
-
-        self.alternate_mode = False
-        self.__backend_name = backend_name
-        self.__port_name = port_name
-        self.__backend = None
-        self.__port = None
-
-    def start(self):
-        if self.__backend is None:
-            try:
-                self.__backend = mido.Backend(self.__backend_name, load=True)
-                self.__open_port()
-            except Exception:
-                raise RuntimeError('Backend loading failed: ' +
-                                   self.__backend_name)
-
-    def stop(self):
-        self.__close_port()
-        self.__backend = None
-
-    def change_backend(self, backand_name):
-        self.stop()
-        self.__backend_name = backand_name
-        self.start()
-
-    def change_port(self, port_name):
-        self.__port_name = port_name
-        self.__close_port()
-        self.__open_port()
-
-    def get_input_names(self):
-        if self.__backend is not None:
-            return self.__backend.get_input_names()
-
-        return []
-
-    def _new_message(self, message):
-        if not self.alternate_mode:
-            self.new_message.emit(message)
-        else:
-            self.new_message_alt.emit(message)
-
-    def __open_port(self):
-        # I'dont expect to find a __port named "default", if so, I assume
-        # this __port is the default one.
-        if self.__port_name in self.get_input_names():
-            self.__port = self.__backend.open_input(self.__port_name,
-                                                    callback=self._new_message)
-        else:
-            # If the __port isn't available use the default one
-            self.__port = self.__backend.open_input(callback=self._new_message)
-
-    def __close_port(self):
-        if self.__port is not None:
-            self.__port.close()
+        bk_name = config['MIDI']['Backend']
+        try:
+            # Load the backend and set as current mido backend
+            mido.set_backend(mido.Backend(bk_name, load=True))
+        except Exception:
+            raise RuntimeError('Backend loading failed: {0}'.format(bk_name))
